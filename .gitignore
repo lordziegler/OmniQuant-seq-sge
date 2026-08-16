@@ -1,0 +1,9 @@
+config.sh
+logs/
+results/
+references/
+sra/
+fastq/
+clean_fastq/
+fastqc_out/
+tmp/

@@ -1,0 +1,12 @@
+# Sample table for array jobs: one sample per line, tab-separated.
+#
+#   SRR        SPECIES               LAYOUT
+#
+# Task N of `qsub -t 1-N` takes the Nth data line; the header, comment lines
+# and blank lines do not count. submit_omniquant.sh generates this file from
+# the SRA RunTable when it is missing, so writing it by hand is only needed to
+# run a subset of the samples.
+SRR	SPECIES	LAYOUT
+SRR12345678	Helicoverpa_armigera	PAIRED
+SRR12345679	Helicoverpa_armigera	PAIRED
+SRR12345680	Spodoptera_frugiperda	SINGLE
