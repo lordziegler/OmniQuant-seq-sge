@@ -52,7 +52,9 @@ source "$CONFIG"
 
 mkdir -p "${WORKDIR}/logs/sge"
 
-COMMON=( -wd "$WORKDIR" -o "${WORKDIR}/logs/sge/" -j y )
+# -notify: SGE sends SIGUSR1 before the h_rt/h_vmem kill, and the job script
+# traps it to remove the half-written outputs of the sample it was on.
+COMMON=( -wd "$WORKDIR" -o "${WORKDIR}/logs/sge/" -j y -notify )
 [[ -n "${SGE_QUEUE:-}" ]] && COMMON+=( -q "$SGE_QUEUE" )
 [[ -n "${SGE_EMAIL:-}" ]] && COMMON+=( -M "$SGE_EMAIL" -m abe )
 
@@ -84,7 +86,9 @@ fi
 
 # The array size has to be known at submission time, so the sample table is
 # built here rather than in a job. It only needs python3 and the RunTable.
-SAMPLES="${SAMPLES_FILE:-${WORKDIR}/${RESULTS_DIR:-results}/samples.tsv}"
+RESULTS="${RESULTS_DIR:-results}"
+[[ "$RESULTS" == /* ]] || RESULTS="${WORKDIR}/${RESULTS}"
+SAMPLES="${SAMPLES_FILE:-${RESULTS}/samples.tsv}"
 if [[ ! -s "$SAMPLES" ]]; then
     echo "[INFO] Building the sample table ..."
     CONFIG="$CONFIG" STAGE=samples bash "$JOB" \

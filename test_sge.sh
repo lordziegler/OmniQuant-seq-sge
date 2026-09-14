@@ -79,6 +79,41 @@ status=0; ( cd "$TMP" && CONFIG="${TMP}/ok.sh" STAGE=nonsense bash "${HERE}/omni
 check "unknown stage aborts" "1" "$status"
 check "and names the stage" "1" "$(grep -c 'Unknown STAGE: nonsense' "${TMP}/out")"
 
+# A relative PIPELINE_DIR has to survive the cd into WORKDIR, or every
+# "${PIPELINE_DIR}/helpers/..." path built afterwards points nowhere. The stub
+# below is empty on purpose: it gets as far as the API check, which is the
+# first thing to print PIPELINE_DIR back.
+mkdir -p "${TMP}/pipe"/{config,lib,steps} "${TMP}/work"
+: > "${TMP}/pipe/run.sh"
+for m in config/pipeline config/species lib/utils lib/species_config \
+         lib/cleanup lib/sample_tracker steps/noop; do
+    : > "${TMP}/pipe/${m}.sh"
+done
+printf 'PIPELINE_DIR=pipe\nWORKDIR=%s\n' "${TMP}/work" > "${TMP}/rel.sh"
+( cd "$TMP" && CONFIG="${TMP}/rel.sh" bash "${HERE}/omniquant_sge.sh" ) >"${TMP}/out" 2>&1 || true
+check "relative PIPELINE_DIR is made absolute" \
+      "1" "$(grep -c "^\[ABORT\] ${TMP}/pipe (" "${TMP}/out")"
+
+echo "require_pipeline_api"
+status=0; ( require_pipeline_api sample_row merge_trackers ) >/dev/null 2>&1 || status=$?
+check "every function present passes" "0" "$status"
+out="$( ( PIPELINE_DIR="$TMP" require_pipeline_api sample_row no_such_pipeline_fn ) 2>&1 )" || true
+check "a missing function is named" "1" "$(grep -c 'does not provide: no_such_pipeline_fn' <<< "$out")"
+check "and the validated release is named" "1" "$(grep -c "validated against OmniQuant-seq ${PIPELINE_REV_TESTED}" <<< "$out")"
+
+echo "submit_omniquant.sh"
+# The sample table lives under RESULTS_DIR, which a cluster user routinely
+# points at an absolute scratch path rather than a subdirectory of WORKDIR.
+mkdir -p "${TMP}/abs-results"
+printf 'SRR\tSPECIES\tLAYOUT\nSRR1\tHelicoverpa_armigera\tPAIRED\nSRR2\tHelicoverpa_armigera\tSINGLE\n' \
+    > "${TMP}/abs-results/samples.tsv"
+printf 'PIPELINE_DIR=%s\nWORKDIR=%s\nRESULTS_DIR=%s\n' "$TMP" "$TMP" "${TMP}/abs-results" > "${TMP}/abs.sh"
+out="$(bash "${HERE}/submit_omniquant.sh" -n -c "${TMP}/abs.sh" 2>&1)" || true
+check "absolute RESULTS_DIR is not prefixed with WORKDIR" \
+      "1" "$(grep -c "2 samples in ${TMP}/abs-results/samples.tsv" <<< "$out")"
+check "the array is sized from the table" "1" "$(grep -c -- '-t 1-2' <<< "$out")"
+check "jobs are submitted with -notify" "3" "$(grep -c -- '-notify' <<< "$out")"
+
 echo "no interactivity"
 hits="$(grep -nE '(^|[^[:alnum:]_])(read[[:space:]]+-[a-z]*p|select[[:space:]]+[A-Za-z_]+[[:space:]]+in)' \
         "${HERE}"/*.sh || true)"

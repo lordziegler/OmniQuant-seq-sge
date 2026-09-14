@@ -9,6 +9,30 @@ sourced from `$PIPELINE_DIR`; this repository only adds the job script, the
 submission wrapper and the configuration. Updating the pipeline is a `git pull`
 in its checkout.
 
+## Pipeline version
+
+This layer is validated against **OmniQuant-seq v2.4.0**. Every job prints what
+it is actually running against, so a result can be traced back to the code that
+produced it:
+
+```
+ Pipeline  : /apps/OmniQuant-seq (v2.4.0, validated: v2.4.0)
+```
+
+The revision comes from `git describe` in `$PIPELINE_DIR` (`unknown` if that
+checkout is not a git repository, which changes nothing else). Immediately
+after loading the pipeline's modules the job checks that every function it
+calls exists, and aborts before spending any walltime if one does not:
+
+```
+[ABORT] /apps/OmniQuant-seq (v2.5.0) does not provide: postprocess_all
+        This SGE layer was validated against OmniQuant-seq v2.4.0.
+        Update OmniQuant-seq-sge, or check out a matching OmniQuant-seq.
+```
+
+`git -C $PIPELINE_DIR checkout v2.4.0` restores a known-good pair; the
+alternative is to update this repository.
+
 ## Requirements
 
 | Tool | Used by |
@@ -26,6 +50,10 @@ Provide them either way, or both:
 # Conda (versions pinned by the pipeline's environment.yml)
 conda env create -f /path/to/OmniQuant-seq/environment.yml
 # -> config.sh: CONDA_ENV="omniquant-seq"
+
+# Or the exact environment the pipeline was validated in, builds and channels
+# included (conda list --explicit); use this one to reproduce published numbers
+conda create --name omniquant-seq --file /path/to/OmniQuant-seq/environment.lock.txt
 
 # Environment modules
 module avail star rsem sra
@@ -101,6 +129,25 @@ printf 'SRR29271587\tHelicoverpa_armigera\tPAIRED\n' > subset.txt
 # config.sh: SAMPLES_FILE="${WORKDIR}/subset.txt"
 ```
 
+Since v2.4.0 the parser refuses to guess: a run whose `LibraryLayout` is
+unreadable is dropped instead of being assumed `PAIRED`, and a
+`LibrarySource=GENOMIC` run is dropped instead of being quantified as if it
+were RNA. Both are named in the parser's output, and both have an override that
+`STAGE=samples` does not pass. When the layout really is known from elsewhere,
+build the table by hand once and point `SAMPLES_FILE` at it:
+
+```bash
+python3 $PIPELINE_DIR/helpers/parse_runtable.py \
+    --input SraRunTable.csv --output samples.tsv \
+    --species Helicoverpa_armigera --assume-layout PAIRED
+# config.sh: SAMPLES_FILE="${WORKDIR}/samples.tsv"
+```
+
+`--star-overhang $STAR_OVERHANG` is passed on every run and warns when a run's
+`AvgSpotLen` is far from `STAR_OVERHANG + 1`. One STAR index is shared by every
+run of a species, so a batch of mixed read lengths gets one `sjdbOverhang`;
+the warning is where that shows up.
+
 ## Configuration
 
 Every value lives in `config.sh` (see `config.example.sh`). Required:
@@ -124,6 +171,7 @@ results/rsem/<species>/   per-sample RSEM results
 results/tracker/          one status file per array task
 results/pipeline_sample_summary.tsv   merged status table
 results/tables/           gene_expression_matrix.tsv + STAR/BBDuk QC matrices
+                          (STAR matrix carries the per-sample strand ratio)
 results/qc/multiqc/       MultiQC reports
 logs/                     per-sample and per-tool logs, plus omniquant_<jobid>.log
 logs/sge/                 stdout/stderr of each job (-o is set by the wrapper)
@@ -159,6 +207,11 @@ qdel -u $USER                  # everything of yours
 On `qdel` the job removes the partial files of the sample it was processing,
 so the next run does not read a truncated FASTQ or BAM as if it were complete.
 
+The same applies when the queue itself stops the job. `submit_omniquant.sh`
+submits with `-notify`, so SGE sends `SIGUSR1` before the `h_rt` or `h_vmem`
+kill and the job gets to clean up; a bare `qsub` without `-notify` is killed
+outright and leaves those files behind for the resubmission to trip over.
+
 ## Re-running and resuming
 
 Every stage is idempotent, so resuming is just resubmitting:
@@ -187,6 +240,16 @@ name from `qconf -spl`, or leave it empty to run on a single slot.
 RAM as `MAX_MEMORY_GB`; the default is 32 GB. On most clusters `h_vmem` is *per
 slot*, so 8 slots × `h_vmem=8G` = 64 GB total. Keep `MAX_MEMORY_GB` below that
 product, and lower it if the queue cannot offer it.
+
+**`STAGE=refs` fails with a download or checksum error.** The references are
+downloaded on the execution node, not the submit host, and since v2.4.0 each
+one is verified against NCBI's `md5checksums.txt` from the same directory. The
+node therefore needs outbound HTTPS. A source that publishes no checksums file
+degrades to a warning; a checksum that does not match deletes the file and
+fails the stage, which is the intended behaviour — rerun it. On a cluster with
+no internet on the compute nodes, build the references on the submit host
+(`CONFIG=$PWD/config.sh STAGE=refs bash omniquant_sge.sh`) or point
+`REFERENCES_DIR` at an already-built shared copy.
 
 **`Killed` or exit status 137.** The queue's memory limit. Raise `h_vmem` in
 `SGE_RESOURCES` / `SGE_ARRAY_RESOURCES`, or reduce `THREADS` — STAR's footprint
@@ -226,8 +289,11 @@ of every sample, so a single failed sample can empty it. Check
 | `config.example.sh` | configuration template |
 | `samples.txt.example` | sample-table format for array jobs |
 | `test_sge.sh` | self-check: indexing, merging, validation, no interactivity |
+| `CHANGELOG.md` | what changed in this layer, and against which pipeline release |
 
-`bash test_sge.sh` runs everything that does not need a cluster.
+`bash test_sge.sh` runs everything that does not need a cluster: 24 checks, no
+bioinformatics tools, no `qsub`. `shellcheck -x omniquant_sge.sh
+submit_omniquant.sh test_sge.sh config.example.sh` is clean.
 
 ## License
 

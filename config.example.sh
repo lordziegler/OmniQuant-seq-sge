@@ -4,6 +4,10 @@
 # Every assignment here overrides the pipeline's own default in
 # $PIPELINE_DIR/config/pipeline.sh. STAGE comes from `qsub -v` and is
 # deliberately absent from this file.
+#
+# Everything below is read by omniquant_sge.sh and submit_omniquant.sh after
+# sourcing this file, never within it.
+# shellcheck disable=SC2034
 
 # --- Required ----------------------------------------------------------------
 PIPELINE_DIR="/path/to/OmniQuant-seq"   # OmniQuant-seq checkout

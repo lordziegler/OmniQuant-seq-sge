@@ -30,6 +30,28 @@ trap 'echo "[ERROR] line ${LINENO} exited with status $?" >&2' ERR
 # Overridden by lib/utils.sh once the pipeline is sourced; same behaviour.
 die() { echo "[ABORT] $*" >&2; exit 1; }
 
+# Last OmniQuant-seq release this layer was validated against. Printed in the
+# job header so a result can be traced to the pipeline that produced it.
+PIPELINE_REV_TESTED="v2.4.0"
+
+# What $PIPELINE_DIR is actually checked out at, for the log.
+pipeline_revision() {
+    git -C "$PIPELINE_DIR" describe --always --dirty 2>/dev/null || echo "unknown"
+}
+
+# The pipeline is sourced, never vendored, so a function renamed or a module
+# split upstream shows up as "command not found" halfway through a queued job,
+# after the walltime has been spent. Check the whole surface at startup instead.
+require_pipeline_api() {
+    local fn missing=()
+    for fn in "$@"; do
+        declare -F "$fn" >/dev/null 2>&1 || missing+=( "$fn" )
+    done
+    (( ${#missing[@]} == 0 )) || die "${PIPELINE_DIR} ($(pipeline_revision)) does not provide: ${missing[*]}
+        This SGE layer was validated against OmniQuant-seq ${PIPELINE_REV_TESTED}.
+        Update OmniQuant-seq-sge, or check out a matching OmniQuant-seq."
+}
+
 # Nth data row of a sample table, skipping the header, comments and blank lines.
 sample_row() {
     local n="$1" file="$2"
@@ -142,6 +164,9 @@ main() {
 
     [[ -n "$PIPELINE_DIR" ]] || die "PIPELINE_DIR is not set. Copy config.example.sh to config.sh and edit it, or submit with: qsub -v PIPELINE_DIR=/path/to/OmniQuant-seq omniquant_sge.sh"
     [[ -f "${PIPELINE_DIR}/run.sh" ]] || die "PIPELINE_DIR is not an OmniQuant-seq checkout: ${PIPELINE_DIR}"
+    # Resolved before the cd below: the pipeline's own helpers/ paths are built
+    # from it long after the working directory has changed.
+    [[ "$PIPELINE_DIR" == /* ]] || PIPELINE_DIR="$(cd "$PIPELINE_DIR" && pwd)"
     [[ -d "$WORKDIR" ]] || die "WORKDIR does not exist: ${WORKDIR}"
     case "$STAGE" in
         all|refs|samples|sample|merge) ;;
@@ -157,6 +182,12 @@ main() {
         source "$mod"
     done
 
+    require_pipeline_api \
+        detect_local_references build_all_references detect_run_table \
+        parse_samples tracker_init tracker_is_complete process_sample \
+        run_sample_loop postprocess_all on_interrupt \
+        check_tools disk_usage species_config_active_keys
+
     # shellcheck disable=SC1090
     [[ -f "$config" ]] && source "$config"
     # shellcheck disable=SC1090
@@ -165,13 +196,21 @@ main() {
     # Derived from values config.sh may have just changed.
     : "${THREADS:=${NSLOTS:-1}}"
     [[ "$THREADS" =~ ^[1-9][0-9]*$ ]] || die "THREADS must be a positive integer: ${THREADS}"
-    THREADS_DOWNLOAD="$THREADS"; THREADS_FASTQC="$THREADS"; THREADS_TRIM="$THREADS"
-    THREADS_STAR="$THREADS";     THREADS_RSEM="$THREADS"
+    # Read by the sourced pipeline modules, not by this file.
+    # shellcheck disable=SC2034
+    {
+        THREADS_DOWNLOAD="$THREADS"
+        THREADS_FASTQC="$THREADS"
+        THREADS_TRIM="$THREADS"
+        THREADS_STAR="$THREADS"
+        THREADS_RSEM="$THREADS"
+    }
     SAMPLES_TSV="${SAMPLES_FILE:-${RESULTS_DIR}/samples.tsv}"
     SUMMARY_FILE="${RESULTS_DIR}/pipeline_sample_summary.tsv"
     TMP_DIR="${TMP_DIR}/job_${JOB_ID}"
 
-    local task=""
+    local PIPELINE_REV task=""
+    PIPELINE_REV="$(pipeline_revision)"
     [[ "${SGE_TASK_ID:-}" =~ ^[0-9]+$ ]] && task="_${SGE_TASK_ID}"
 
     cd "$WORKDIR"
@@ -179,7 +218,10 @@ main() {
              "$REFERENCES_DIR" sra fastq clean_fastq fastqc_out
 
     [[ "${CLEANUP:-true}" == true ]] && trap 'rm -rf "$TMP_DIR"' EXIT
-    trap on_interrupt SIGINT SIGTERM
+    # SIGUSR1/SIGUSR2 are what `qsub -notify` sends before the h_rt or h_vmem
+    # kill; treating them like a Ctrl-C is what keeps a truncated FASTQ or BAM
+    # from surviving the job that was cut off.
+    trap on_interrupt SIGINT SIGTERM SIGUSR1 SIGUSR2
 
     exec > >(tee -a "${LOG_DIR}/omniquant_${JOB_ID}${task}.log") 2>&1
 
@@ -189,7 +231,7 @@ main() {
     echo " Job ID    : ${JOB_ID}"
     echo " Started   : $(date '+%Y-%m-%d %H:%M:%S')"
     echo " Workdir   : ${WORKDIR}"
-    echo " Pipeline  : ${PIPELINE_DIR}"
+    echo " Pipeline  : ${PIPELINE_DIR} (${PIPELINE_REV}, validated: ${PIPELINE_REV_TESTED})"
     echo " Threads   : ${THREADS}"
     echo " Test mode : ${TEST_MODE} (${TEST_READS} reads)"
     echo " Species   : $(species_config_active_keys | paste -sd, -)"
@@ -202,6 +244,7 @@ main() {
     case "$STAGE" in
         samples) check_tools python3 ;;
         merge)   check_tools python3 multiqc ;;
+        refs)    check_tools STAR rsem-prepare-reference ;;
         *)       check_tools prefetch fastq-dump fasterq-dump fastqc multiqc \
                              bbduk.sh STAR rsem-prepare-reference rsem-calculate-expression ;;
     esac
