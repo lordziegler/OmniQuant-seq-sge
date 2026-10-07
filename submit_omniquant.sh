@@ -8,6 +8,7 @@
 #   -w  working directory           (default: WORKDIR from the configuration)
 #   -s  serial: a single job that runs every stage, no array
 #   -n  dry run: print the qsub commands instead of submitting them
+#   -b  build the sample table here instead of refusing to (see below)
 
 set -euo pipefail
 
@@ -16,19 +17,21 @@ JOB="${HERE}/omniquant_sge.sh"
 
 die() { echo "[ABORT] $*" >&2; exit 1; }
 
-usage() { sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; }
+usage() { sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; }
 
 CONFIG="${PWD}/config.sh"
 WORKDIR_ARG=""
 SERIAL=false
 DRY=false
+BUILD_HERE=false
 
-while getopts ":c:w:snh" opt; do
+while getopts ":c:w:snbh" opt; do
     case "$opt" in
         c) CONFIG="$OPTARG" ;;
         w) WORKDIR_ARG="$OPTARG" ;;
         s) SERIAL=true ;;
         n) DRY=true ;;
+        b) BUILD_HERE=true ;;
         h) usage; exit 0 ;;
         *) usage >&2; exit 1 ;;
     esac
@@ -84,13 +87,20 @@ if [[ "$SERIAL" == true ]]; then
     exit 0
 fi
 
-# The array size has to be known at submission time, so the sample table is
-# built here rather than in a job. It only needs python3 and the RunTable.
+# The array size has to be known at submission time, so the sample table has to
+# exist before the first qsub. Building it is cheap — python3 and the RunTable,
+# a few seconds — but this script runs on the submission host, and on a cluster
+# whose login node is shared that is not ours to spend. So it is refused by
+# default and the job that does it is printed instead; -b opts back in.
 RESULTS="${RESULTS_DIR:-results}"
 [[ "$RESULTS" == /* ]] || RESULTS="${WORKDIR}/${RESULTS}"
 SAMPLES="${SAMPLES_FILE:-${RESULTS}/samples.tsv}"
 if [[ ! -s "$SAMPLES" ]]; then
-    echo "[INFO] Building the sample table ..."
+    [[ "$BUILD_HERE" == true ]] || die "The sample table does not exist yet: ${SAMPLES}
+        Build it on a compute node, then run this again:
+            qsub -v CONFIG=${CONFIG},STAGE=samples ${JOB}
+        Or pass -b to build it here, on this submission host."
+    echo "[INFO] Building the sample table here (-b) ..."
     CONFIG="$CONFIG" STAGE=samples bash "$JOB" \
         || die "Could not build ${SAMPLES}. Submit it as a job instead:
         qsub -v CONFIG=${CONFIG},STAGE=samples ${JOB}"

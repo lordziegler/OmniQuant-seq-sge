@@ -113,6 +113,16 @@ check "absolute RESULTS_DIR is not prefixed with WORKDIR" \
       "1" "$(grep -c "2 samples in ${TMP}/abs-results/samples.tsv" <<< "$out")"
 check "the array is sized from the table" "1" "$(grep -c -- '-t 1-2' <<< "$out")"
 check "jobs are submitted with -notify" "3" "$(grep -c -- '-notify' <<< "$out")"
+check "nothing is executed on the submission host" "0" \
+      "$(grep -c 'Building the sample table' <<< "$out")"
+
+# A missing table must not be built on the submission host by default: on a
+# shared login node that is not ours to spend.
+printf 'PIPELINE_DIR=%s\nWORKDIR=%s\nSAMPLES_FILE=%s\n' "$TMP" "$TMP" "${TMP}/absent.tsv" > "${TMP}/nosamples.sh"
+out="$(bash "${HERE}/submit_omniquant.sh" -n -c "${TMP}/nosamples.sh" 2>&1)" || true
+check "a missing table is refused, not built here" "1" \
+      "$(grep -c 'The sample table does not exist yet' <<< "$out")"
+check "and the compute-node command is given" "1" "$(grep -c 'STAGE=samples' <<< "$out")"
 
 echo "no interactivity"
 hits="$(grep -nE '(^|[^[:alnum:]_])(read[[:space:]]+-[a-z]*p|select[[:space:]]+[A-Za-z_]+[[:space:]]+in)' \

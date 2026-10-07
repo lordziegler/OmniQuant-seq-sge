@@ -291,7 +291,7 @@ of every sample, so a single failed sample can empty it. Check
 | `test_sge.sh` | self-check: indexing, merging, validation, no interactivity |
 | `CHANGELOG.md` | what changed in this layer, and against which pipeline release |
 
-`bash test_sge.sh` runs everything that does not need a cluster: 24 checks, no
+`bash test_sge.sh` runs everything that does not need a cluster: 27 checks, no
 bioinformatics tools, no `qsub`. `shellcheck -x omniquant_sge.sh
 submit_omniquant.sh test_sge.sh config.example.sh` is clean.
 

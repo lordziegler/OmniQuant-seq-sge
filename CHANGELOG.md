@@ -7,6 +7,16 @@ validated against, and every job prints both at startup.
 
 ## Unreleased
 
+### Changed
+
+- **`submit_omniquant.sh` no longer runs pipeline work on the submission host.**
+  The sample table has to exist before the first `qsub`, because the array is
+  sized from it, and the script used to build it in place. That is a few seconds
+  of `python3` — but on a cluster whose login node is shared, spending it there
+  is not the script's call to make. A missing table is now refused with the
+  `qsub ... STAGE=samples` that builds it on a compute node; `-b` opts back into
+  building it locally.
+
 ### Fixed
 
 - **Sample tables with metadata columns.** OmniQuant-seq now appends `TISSUE`,
