@@ -97,6 +97,7 @@ Other ways to run it:
 ```bash
 ./submit_omniquant.sh -n                    # dry run: print the qsub commands
 ./submit_omniquant.sh -s                    # serial: one job, samples one after another
+./submit_omniquant.sh -m SRR10345445,SRR10345450   # only these runs: retry or analyse a few
 ./submit_omniquant.sh -c /path/config.sh    # configuration somewhere else
 ./submit_omniquant.sh -w /scratch/other     # override WORKDIR
 
@@ -117,12 +118,28 @@ qsub -v PIPELINE_DIR=/apps/OmniQuant-seq,WORKDIR=$PWD /path/to/omniquant_sge.sh
 ### Multiple samples
 
 The sample table is `SRR<TAB>SPECIES<TAB>LAYOUT`, one line per run
-(see `samples.txt.example`). `submit_omniquant.sh` generates it from the
-RunTable into `results/samples.tsv` when it is missing, and sizes the array
-from it. Array task *N* takes the *N*-th data line; the header, comments and
-blank lines do not count.
+(see `samples.txt.example`). The pipeline appends sample metadata after
+`LAYOUT` (`TISSUE`, `PLATFORM`, `BIOPROJECT`, …); the jobs ignore those
+columns, so a hand-written three-column table works just as well.
+`STAGE=samples` builds it from the RunTable into `results/samples.tsv`;
+`submit_omniquant.sh` sizes the array from it, and refuses to build it on the
+submission host unless given `-b`. Array task *N* takes the *N*-th data line;
+the header, comments and blank lines do not count.
 
-To run a subset, write the table by hand and point `SAMPLES_FILE` at it:
+To run only some of the runs — retry the ones that failed, or analyse one on
+its own — name them with `-m`. They are cut from the full table into
+`results/samples.manual.tsv` (metadata included) and only they are submitted;
+a name that is not in the table aborts the submission:
+
+```bash
+./submit_omniquant.sh -m SRR10345445,SRR10345450
+```
+
+Samples whose tracker already says `OK` are still skipped, and `STAGE=merge`
+rebuilds the matrices from every result in `results/rsem/`, not only these.
+
+For a subset that is not in the table at all, write one by hand and point
+`SAMPLES_FILE` at it:
 
 ```bash
 printf 'SRR29271587\tHelicoverpa_armigera\tPAIRED\n' > subset.txt
@@ -269,7 +286,8 @@ and checks the environment the same way.
 **`prefetch` fails on some samples.** Usually the network or an NCBI rate
 limit. The stage retries `PREFETCH_RETRIES` times; a sample that still fails is
 recorded as `FAILED` in the tracker and the rest of the array continues.
-Resubmit later for those tasks: `qsub -t 4,7 ... STAGE=sample`.
+Resubmit later for just those runs: `./submit_omniquant.sh -m SRR...,SRR...`
+(or `qsub -t 4,7 ... STAGE=sample` by task number).
 
 **`No sample at index N`.** The array is larger than the sample table. Count
 the data lines (`grep -vcE '^(#|SRR\s|$)' samples.tsv`) and submit `-t 1-N`
@@ -291,7 +309,7 @@ of every sample, so a single failed sample can empty it. Check
 | `test_sge.sh` | self-check: indexing, merging, validation, no interactivity |
 | `CHANGELOG.md` | what changed in this layer, and against which pipeline release |
 
-`bash test_sge.sh` runs everything that does not need a cluster: 27 checks, no
+`bash test_sge.sh` runs everything that does not need a cluster: 35 checks, no
 bioinformatics tools, no `qsub`. `shellcheck -x omniquant_sge.sh
 submit_omniquant.sh test_sge.sh config.example.sh` is clean.
 

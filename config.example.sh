@@ -1,24 +1,15 @@
 #!/usr/bin/env bash
-# OmniQuant-seq SGE configuration. Copy to config.sh next to your data and edit.
-#
-# Every assignment here overrides the pipeline's own default in
-# $PIPELINE_DIR/config/pipeline.sh. STAGE comes from `qsub -v` and is
-# deliberately absent from this file.
-#
-# Everything below is read by omniquant_sge.sh and submit_omniquant.sh after
-# sourcing this file, never within it.
+# Copy to config.sh. Overrides $PIPELINE_DIR/config/pipeline.sh; STAGE comes
+# from qsub -v.
 # shellcheck disable=SC2034
 
-# --- Required ----------------------------------------------------------------
 PIPELINE_DIR="/path/to/OmniQuant-seq"   # OmniQuant-seq checkout
 WORKDIR="/path/to/analysis"             # inputs are read here, outputs written here
 
-# --- Cluster environment -----------------------------------------------------
 # MODULES=( star/2.7.10a rsem/1.3.3 sra-tools/3.4.1 fastqc/0.12.1 bbmap/39.81 )
 CONDA_ENV="omniquant-seq"
 # CONDA_BASE="/opt/miniconda3"          # only if `conda` is not on PATH
 
-# --- Submission (read by submit_omniquant.sh) --------------------------------
 JOB_NAME="OmniQuant"
 SGE_PE="smp"                            # parallel environment name (qconf -spl)
 SGE_SLOTS=8
@@ -28,8 +19,7 @@ SGE_ARRAY_RESOURCES="h_rt=12:00:00,h_vmem=8G"
 # SGE_EMAIL="you@example.edu"           # adds -M <addr> -m abe
 # SGE_MAX_TASKS=10                      # concurrent array tasks (qsub -tc)
 
-# --- Pipeline ----------------------------------------------------------------
-# THREADS defaults to $NSLOTS, the slots SGE granted. Set it only off-cluster.
+# THREADS defaults to $NSLOTS; set it only off-cluster.
 # THREADS=8
 MAX_MEMORY_GB=32                        # STAR index RAM limit
 TEST_MODE=false                         # true: stop after TEST_READS reads

@@ -7,6 +7,17 @@ validated against, and every job prints both at startup.
 
 ## Unreleased
 
+### Added
+
+- **`submit_omniquant.sh -m SRR[,SRR...]`**, the cluster side of the
+  pipeline's `run.sh --manual`: submits only the named runs, to retry a failed
+  sample or analyse one on its own. They are cut out of the full sample table
+  with `awk` on the submission host into `results/samples.manual.tsv`, the
+  array is sized from that, and the jobs receive its path as
+  `MANUAL_SAMPLES_FILE`, which wins over a `SAMPLES_FILE` set in `config.sh`.
+  A run that is not in the table aborts the submission and is named. The list
+  cannot travel to the job directly because `qsub -v` splits on commas.
+
 ### Changed
 
 - **`submit_omniquant.sh` no longer runs pipeline work on the submission host.**

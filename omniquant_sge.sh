@@ -1,15 +1,5 @@
 #!/bin/bash
-# OmniQuant-seq on Sun Grid Engine. One job script; the stage is chosen with
-# $STAGE, so a bare `qsub omniquant_sge.sh` runs the whole pipeline serially
-# and submit_omniquant.sh splits it into refs -> per-sample array -> merge.
-#
-#   STAGE=all      everything in one job (default)
-#   STAGE=refs     download genomes, build the STAR and RSEM indexes
-#   STAGE=samples  write the sample table from the SRA RunTable
-#   STAGE=sample   one sample, picked by $SGE_TASK_ID (array jobs)
-#   STAGE=merge    join the per-sample trackers, build the matrices and MultiQC
-#
-# Everything else comes from config.sh (see config.example.sh).
+# STAGE=all|refs|samples|sample|merge (default all); settings from config.sh.
 
 #$ -S /bin/bash
 #$ -N OmniQuant
@@ -17,8 +7,7 @@
 #$ -j y
 #$ -l h_rt=24:00:00
 
-# Parallel environments, queues and mail are cluster-specific: submit_omniquant.sh
-# passes them on the qsub command line. Uncomment and adjust for a bare qsub.
+# Cluster-specific; submit_omniquant.sh passes them. Uncomment for a bare qsub.
 ##$ -pe smp 8
 ##$ -q all.q
 ##$ -m abe
@@ -27,21 +16,15 @@
 set -euo pipefail
 trap 'echo "[ERROR] line ${LINENO} exited with status $?" >&2' ERR
 
-# Overridden by lib/utils.sh once the pipeline is sourced; same behaviour.
 die() { echo "[ABORT] $*" >&2; exit 1; }
 
-# Last OmniQuant-seq release this layer was validated against. Printed in the
-# job header so a result can be traced to the pipeline that produced it.
 PIPELINE_REV_TESTED="v2.4.0"
 
-# What $PIPELINE_DIR is actually checked out at, for the log.
 pipeline_revision() {
     git -C "$PIPELINE_DIR" describe --always --dirty 2>/dev/null || echo "unknown"
 }
 
-# The pipeline is sourced, never vendored, so a function renamed or a module
-# split upstream shows up as "command not found" halfway through a queued job,
-# after the walltime has been spent. Check the whole surface at startup instead.
+# Fail at startup, not mid-job after the walltime, if the pipeline API changed.
 require_pipeline_api() {
     local fn missing=()
     for fn in "$@"; do
@@ -52,13 +35,12 @@ require_pipeline_api() {
         Update OmniQuant-seq-sge, or check out a matching OmniQuant-seq."
 }
 
-# Nth data row of a sample table, skipping the header, comments and blank lines.
+# Skips the header, comments and blank lines.
 sample_row() {
     local n="$1" file="$2"
     awk -v n="$n" 'NF==0 || $1=="SRR" || $1 ~ /^#/ { next } ++i==n { print; exit }' "$file"
 }
 
-# Array tasks each write their own tracker file; this joins them into one table.
 merge_trackers() {
     local dir="$1" out="$2" parts=()
     mapfile -t parts < <(find "$dir" -maxdepth 1 -name '*.tsv' 2>/dev/null | sort)
@@ -68,7 +50,6 @@ merge_trackers() {
     echo "[OK] Sample summary: ${out} (${#parts[@]} samples)"
 }
 
-# `module load` lines and/or a conda environment, both optional.
 setup_environment() {
     if [[ -n "${MODULES+x}" && ${#MODULES[@]} -gt 0 ]]; then
         if ! command -v module >/dev/null 2>&1 && [[ -f /etc/profile.d/modules.sh ]]; then
@@ -115,14 +96,12 @@ stage_sample() {
     local row srr species layout
     row="$(sample_row "$id" "$SAMPLES_TSV")"
     [[ -n "$row" ]] || die "No sample at index ${id} in ${SAMPLES_TSV}."
-    # Trailing `_` swallows the metadata columns (TISSUE, PLATFORM, ...) that
-    # newer pipelines append; without it they would land in $layout.
+    # `_` takes the metadata columns, which would otherwise land in $layout.
     IFS=$'\t' read -r srr species layout _ <<< "$row"
     [[ -n "$srr" && -n "$species" && -n "$layout" ]] \
         || die "Malformed row ${id}: expected SRR<TAB>SPECIES<TAB>LAYOUT[<TAB>metadata...], got: ${row}"
 
-    # One tracker per task: concurrent tasks rewriting the single summary table
-    # would drop each other's rows. STAGE=merge joins them at the end.
+    # One tracker per task: concurrent writes to one table would drop rows.
     SUMMARY_FILE="${RESULTS_DIR}/tracker/${srr}.tsv"
     tracker_init
 
@@ -153,9 +132,8 @@ main() {
     local config="${CONFIG:-${PWD}/config.sh}"
     [[ "$config" == /* ]] || config="${PWD}/${config}"
 
-    # config.sh is read twice on purpose: first for PIPELINE_DIR and WORKDIR,
-    # which are needed to load the pipeline at all, and again afterwards so its
-    # values win over the defaults in the pipeline's own config/pipeline.sh.
+    # Sourced twice: first for PIPELINE_DIR/WORKDIR, then to override the
+    # pipeline's defaults.
     # shellcheck disable=SC1090
     [[ -f "$config" ]] && source "$config"
 
@@ -166,8 +144,7 @@ main() {
 
     [[ -n "$PIPELINE_DIR" ]] || die "PIPELINE_DIR is not set. Copy config.example.sh to config.sh and edit it, or submit with: qsub -v PIPELINE_DIR=/path/to/OmniQuant-seq omniquant_sge.sh"
     [[ -f "${PIPELINE_DIR}/run.sh" ]] || die "PIPELINE_DIR is not an OmniQuant-seq checkout: ${PIPELINE_DIR}"
-    # Resolved before the cd below: the pipeline's own helpers/ paths are built
-    # from it long after the working directory has changed.
+    # Absolute before the cd below.
     [[ "$PIPELINE_DIR" == /* ]] || PIPELINE_DIR="$(cd "$PIPELINE_DIR" && pwd)"
     [[ -d "$WORKDIR" ]] || die "WORKDIR does not exist: ${WORKDIR}"
     case "$STAGE" in
@@ -176,7 +153,9 @@ main() {
     esac
 
     local mod
+    # shellcheck source=/dev/null
     source "${PIPELINE_DIR}/config/pipeline.sh"
+    # shellcheck source=/dev/null
     source "${PIPELINE_DIR}/config/species.sh"
     for mod in "${PIPELINE_DIR}"/lib/{utils,species_config,cleanup,sample_tracker}.sh \
                "${PIPELINE_DIR}"/steps/*.sh; do
@@ -195,11 +174,9 @@ main() {
     # shellcheck disable=SC1090
     [[ -n "${SPECIES_FILE:-}" ]] && source "$SPECIES_FILE"
 
-    # Derived from values config.sh may have just changed.
     : "${THREADS:=${NSLOTS:-1}}"
     [[ "$THREADS" =~ ^[1-9][0-9]*$ ]] || die "THREADS must be a positive integer: ${THREADS}"
-    # Read by the sourced pipeline modules, not by this file.
-    # shellcheck disable=SC2034
+    # shellcheck disable=SC2034  # read by the sourced pipeline
     {
         THREADS_DOWNLOAD="$THREADS"
         THREADS_FASTQC="$THREADS"
@@ -207,7 +184,8 @@ main() {
         THREADS_STAR="$THREADS"
         THREADS_RSEM="$THREADS"
     }
-    SAMPLES_TSV="${SAMPLES_FILE:-${RESULTS_DIR}/samples.tsv}"
+    # From submit_omniquant.sh -m; wins over a SAMPLES_FILE set in config.sh.
+    SAMPLES_TSV="${MANUAL_SAMPLES_FILE:-${SAMPLES_FILE:-${RESULTS_DIR}/samples.tsv}}"
     SUMMARY_FILE="${RESULTS_DIR}/pipeline_sample_summary.tsv"
     TMP_DIR="${TMP_DIR}/job_${JOB_ID}"
 
@@ -220,9 +198,7 @@ main() {
              "$REFERENCES_DIR" sra fastq clean_fastq fastqc_out
 
     [[ "${CLEANUP:-true}" == true ]] && trap 'rm -rf "$TMP_DIR"' EXIT
-    # SIGUSR1/SIGUSR2 are what `qsub -notify` sends before the h_rt or h_vmem
-    # kill; treating them like a Ctrl-C is what keeps a truncated FASTQ or BAM
-    # from surviving the job that was cut off.
+    # qsub -notify sends SIGUSR1/2 before an h_rt/h_vmem kill.
     trap on_interrupt SIGINT SIGTERM SIGUSR1 SIGUSR2
 
     exec > >(tee -a "${LOG_DIR}/omniquant_${JOB_ID}${task}.log") 2>&1
@@ -241,8 +217,7 @@ main() {
 
     setup_environment
 
-    # Only the tools the stage actually runs, so the cheap stages stay usable
-    # on a login node.
+    # Only this stage's tools, so the cheap stages work on a login node.
     case "$STAGE" in
         samples) check_tools python3 ;;
         merge)   check_tools python3 multiqc ;;
@@ -264,7 +239,7 @@ main() {
     echo "[DONE] Stage ${STAGE} finished at $(date '+%Y-%m-%d %H:%M:%S')."
 }
 
-# Sourceable for the tests; runs only when executed.
+# Sourceable by the tests.
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     main "$@"
 fi

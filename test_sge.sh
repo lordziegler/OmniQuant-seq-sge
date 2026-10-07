@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# Self-check for the SGE layer: sample indexing, tracker merging, input
-# validation and the absence of interactive code. Needs no cluster and no
-# bioinformatics tools.
-#
-# Usage: bash test_sge.sh
+# bash test_sge.sh — no cluster, no bioinformatics tools.
 
 set -uo pipefail
 
@@ -42,8 +38,6 @@ merge_trackers "${TMP}/empty" "${TMP}/none.tsv" >/dev/null
 check "no tracker dir is not fatal" "0" "$?"
 
 echo "stage_sample"
-# The stages below run in subshells with the pipeline calls stubbed out, so the
-# indexing and its error paths can be checked without a cluster.
 tracker_init()        { :; }
 tracker_is_complete() { return 1; }
 process_sample()      { echo "$1|$2|$3"; }
@@ -79,10 +73,7 @@ status=0; ( cd "$TMP" && CONFIG="${TMP}/ok.sh" STAGE=nonsense bash "${HERE}/omni
 check "unknown stage aborts" "1" "$status"
 check "and names the stage" "1" "$(grep -c 'Unknown STAGE: nonsense' "${TMP}/out")"
 
-# A relative PIPELINE_DIR has to survive the cd into WORKDIR, or every
-# "${PIPELINE_DIR}/helpers/..." path built afterwards points nowhere. The stub
-# below is empty on purpose: it gets as far as the API check, which is the
-# first thing to print PIPELINE_DIR back.
+# Empty stub: it only has to reach the API check, which prints PIPELINE_DIR.
 mkdir -p "${TMP}/pipe"/{config,lib,steps} "${TMP}/work"
 : > "${TMP}/pipe/run.sh"
 for m in config/pipeline config/species lib/utils lib/species_config \
@@ -102,8 +93,6 @@ check "a missing function is named" "1" "$(grep -c 'does not provide: no_such_pi
 check "and the validated release is named" "1" "$(grep -c "validated against OmniQuant-seq ${PIPELINE_REV_TESTED}" <<< "$out")"
 
 echo "submit_omniquant.sh"
-# The sample table lives under RESULTS_DIR, which a cluster user routinely
-# points at an absolute scratch path rather than a subdirectory of WORKDIR.
 mkdir -p "${TMP}/abs-results"
 printf 'SRR\tSPECIES\tLAYOUT\nSRR1\tHelicoverpa_armigera\tPAIRED\nSRR2\tHelicoverpa_armigera\tSINGLE\n' \
     > "${TMP}/abs-results/samples.tsv"
@@ -116,13 +105,31 @@ check "jobs are submitted with -notify" "3" "$(grep -c -- '-notify' <<< "$out")"
 check "nothing is executed on the submission host" "0" \
       "$(grep -c 'Building the sample table' <<< "$out")"
 
-# A missing table must not be built on the submission host by default: on a
-# shared login node that is not ours to spend.
 printf 'PIPELINE_DIR=%s\nWORKDIR=%s\nSAMPLES_FILE=%s\n' "$TMP" "$TMP" "${TMP}/absent.tsv" > "${TMP}/nosamples.sh"
 out="$(bash "${HERE}/submit_omniquant.sh" -n -c "${TMP}/nosamples.sh" 2>&1)" || true
 check "a missing table is refused, not built here" "1" \
       "$(grep -c 'The sample table does not exist yet' <<< "$out")"
 check "and the compute-node command is given" "1" "$(grep -c 'STAGE=samples' <<< "$out")"
+
+printf 'SRR\tSPECIES\tLAYOUT\tTISSUE\nSRR1\tHa\tPAIRED\tGut\nSRR2\tHa\tSINGLE\tHead\nSRR3\tHa\tPAIRED\tNA\n' \
+    > "${TMP}/abs-results/samples.tsv"
+out="$(bash "${HERE}/submit_omniquant.sh" -n -c "${TMP}/abs.sh" -m srr3 -m SRR1 2>&1)" || true
+check "-m keeps only the named runs, header first" \
+      "SRR,SRR1,SRR3," "$(cut -f1 "${TMP}/abs-results/samples.manual.tsv" | tr '\n' ',')"
+check "-m keeps the metadata columns" "Gut" "$(awk -F'\t' '$1=="SRR1"{print $4}' "${TMP}/abs-results/samples.manual.tsv")"
+check "-m sizes the array from the subset" "1" "$(grep -c -- '-t 1-2' <<< "$out")"
+check "-m hands the subset to the array" "1" \
+      "$(grep -c "STAGE=sample,MANUAL_SAMPLES_FILE=${TMP}/abs-results/samples.manual.tsv" <<< "$out")"
+out="$(bash "${HERE}/submit_omniquant.sh" -n -s -c "${TMP}/abs.sh" -m SRR2 2>&1)" || true
+check "-m reaches a serial job too" "1" "$(grep -c 'STAGE=all,MANUAL_SAMPLES_FILE=' <<< "$out")"
+status=0; out="$(bash "${HERE}/submit_omniquant.sh" -n -c "${TMP}/abs.sh" -m SRR1,SRR9 2>&1)" || status=$?
+check "-m with an unknown run aborts" "1" "$status"
+check "and names it" "1" "$(grep -c 'Not in .*: SRR9' <<< "$out")"
+
+echo "manual sample table in the job"
+SAMPLES_TSV="${TMP}/abs-results/samples.manual.tsv"
+check "task 1 of the subset is its first run" "SRR1|Ha|PAIRED" \
+      "$(SGE_TASK_ID=1 stage_sample 2>/dev/null | tail -n 1)"
 
 echo "no interactivity"
 hits="$(grep -nE '(^|[^[:alnum:]_])(read[[:space:]]+-[a-z]*p|select[[:space:]]+[A-Za-z_]+[[:space:]]+in)' \
