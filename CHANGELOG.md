@@ -5,6 +5,17 @@ This layer carries no pipeline code of its own: it sources
 `$PIPELINE_DIR`. Each release therefore names the pipeline release it was
 validated against, and every job prints both at startup.
 
+## Unreleased
+
+### Fixed
+
+- **Sample tables with metadata columns.** OmniQuant-seq now appends `TISSUE`,
+  `PLATFORM`, `INSTRUMENT`, `BIOPROJECT`, `DEV_STAGE`, `SEX` and `TREATMENT`
+  after `LAYOUT` in `samples.tsv`. `STAGE=sample` read each row into three
+  variables, so those columns landed in `$layout` and a PAIRED run would have
+  been processed as SINGLE. The extra columns are now discarded; three-column
+  tables still work.
+
 ## v1.1.0 — 2026-09-14
 
 Validated against **OmniQuant-seq v2.4.0** (previously v2.3.0).

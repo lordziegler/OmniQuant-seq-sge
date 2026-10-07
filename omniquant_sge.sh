@@ -115,9 +115,11 @@ stage_sample() {
     local row srr species layout
     row="$(sample_row "$id" "$SAMPLES_TSV")"
     [[ -n "$row" ]] || die "No sample at index ${id} in ${SAMPLES_TSV}."
-    IFS=$'\t' read -r srr species layout <<< "$row"
+    # Trailing `_` swallows the metadata columns (TISSUE, PLATFORM, ...) that
+    # newer pipelines append; without it they would land in $layout.
+    IFS=$'\t' read -r srr species layout _ <<< "$row"
     [[ -n "$srr" && -n "$species" && -n "$layout" ]] \
-        || die "Malformed row ${id}: expected SRR<TAB>SPECIES<TAB>LAYOUT, got: ${row}"
+        || die "Malformed row ${id}: expected SRR<TAB>SPECIES<TAB>LAYOUT[<TAB>metadata...], got: ${row}"
 
     # One tracker per task: concurrent tasks rewriting the single summary table
     # would drop each other's rows. STAGE=merge joins them at the end.
